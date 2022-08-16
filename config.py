@@ -238,6 +238,16 @@ _C.LOCAL_RANK = 0
 _C.FUSED_WINDOW_PROCESS = False
 _C.FUSED_LAYERNORM = False
 
+#------------------
+# NNCF
+#------------------
+_C.NNCF_CFG = None
+# Distillation
+_C.DISTILL = CN()
+_C.DISTILL.TEMPERATURE = 5.0
+_C.DISTILL.ALPHA = 0.9
+_C.DISTILL.TEACHER_CKPT = None
+
 
 def _update_config_from_file(config, cfg_file):
     config.defrost()
@@ -304,9 +314,6 @@ def update_config(config, args):
 
     if args.nncf_cfg is not None:
         config.NNCF_CFG = args.nncf_cfg
-    else:
-        config.NNCF_CFG = None
-
     # set local rank for distributed training
     config.LOCAL_RANK = args.local_rank
 
@@ -323,4 +330,11 @@ def get_config(args):
     config = _C.clone()
     update_config(config, args)
 
+    return config
+
+def update_config_to_current(baseconfig):
+    # there could new config particular added over time
+    # this function is to update old config with latest config field
+    config = _C.clone()
+    config.merge_from_other_cfg(baseconfig)
     return config

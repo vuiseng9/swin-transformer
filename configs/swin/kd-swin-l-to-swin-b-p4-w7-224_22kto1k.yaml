@@ -1,0 +1,20 @@
+MODEL:
+  TYPE: swin
+  NAME: distill-lt-swin-b-p4-w7-224_22kto1k-ft
+  DROP_PATH_RATE: 0.2
+  SWIN:
+    EMBED_DIM: 128
+    DEPTHS: [ 2, 2, 18, 2 ]
+    NUM_HEADS: [ 4, 8, 16, 32 ]
+    WINDOW_SIZE: 7
+DISTILL:
+  TEMPERATURE: 5.0
+  ALPHA: 0.9
+  TEACHER_CKPT: /data/vchua/run/msft-swin/swin/swin_large_patch4_window7_224_22kto1k_finetune/default/ckpt_epoch_29.pth
+TRAIN:
+  EPOCHS: 10
+  WARMUP_EPOCHS: 2
+  WEIGHT_DECAY: 1e-8
+  BASE_LR: 2e-05
+  WARMUP_LR: 2e-08
+  MIN_LR: 2e-07

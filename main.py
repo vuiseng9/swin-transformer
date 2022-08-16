@@ -16,11 +16,12 @@ import numpy as np
 import torch
 import torch.backends.cudnn as cudnn
 import torch.distributed as dist
+import torch.nn.functional as F
 
 from timm.loss import LabelSmoothingCrossEntropy, SoftTargetCrossEntropy
 from timm.utils import accuracy, AverageMeter
 
-from config import get_config
+from config import get_config, update_config_to_current
 from models import build_model
 from data import build_loader
 from lr_scheduler import build_scheduler
@@ -34,6 +35,7 @@ from nncf import NNCFConfig
 import jstyleson as json
 from copy import deepcopy
 from nncf.torch.initialization import register_default_init_args
+from kd import KDTeacher
 
 def parse_option():
     parser = argparse.ArgumentParser('Swin Transformer training and evaluation script', add_help=False)
@@ -181,6 +183,15 @@ def main(config):
         if config.EVAL_MODE:
             return
 
+    teacher=None
+    if config.DISTILL.TEACHER_CKPT is not None:
+        teacher=KDTeacher(config)
+        teacher.cuda()
+        teacher.eval()
+        teacher.ddp(device_ids=[config.LOCAL_RANK])
+        acc1, acc5, loss = validate(config, data_loader_val, teacher)
+        logger.info(f"Distillation enabled: Teacher Accuracy on the {len(dataset_val)} test images: {acc1:.1f}%")
+
     if config.THROUGHPUT_MODE:
         throughput(data_loader_val, model, logger)
         return
@@ -191,7 +202,7 @@ def main(config):
         data_loader_train.sampler.set_epoch(epoch)
 
         train_one_epoch(config, model, criterion, data_loader_train, optimizer, epoch, mixup_fn, lr_scheduler,
-                        loss_scaler)
+                        loss_scaler, teacher)
         if dist.get_rank() == 0 and (epoch % config.SAVE_FREQ == 0 or epoch == (config.TRAIN.EPOCHS - 1)):
             save_checkpoint(config, epoch, model_without_ddp, max_accuracy, optimizer, lr_scheduler, loss_scaler,
                             logger)
@@ -206,7 +217,7 @@ def main(config):
     logger.info('Training time {}'.format(total_time_str))
 
 
-def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mixup_fn, lr_scheduler, loss_scaler):
+def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mixup_fn, lr_scheduler, loss_scaler, teacher=None):
     model.train()
     optimizer.zero_grad()
 
@@ -228,6 +239,21 @@ def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mix
         with torch.cuda.amp.autocast(enabled=config.AMP_ENABLE):
             outputs = model(samples)
         loss = criterion(outputs, targets)
+
+        if teacher is not None:
+            # https://discuss.pytorch.org/t/autocast-and-torch-no-grad-unexpected-behaviour/93475/2
+            with torch.cuda.amp.autocast(enabled=config.AMP_ENABLE):
+                with torch.no_grad():
+                    teacher_logits = teacher(samples)
+
+            kd_loss = F.kl_div(
+                input=F.log_softmax(outputs / teacher.temp, dim=-1),
+                target=F.softmax(teacher_logits / teacher.temp, dim=-1),
+                reduction="batchmean"
+                ) * (teacher.temp ** 2)
+
+            loss = teacher.alpha * kd_loss + (1 - teacher.alpha) * loss
+
         loss = loss / config.TRAIN.ACCUMULATION_STEPS
 
         # this attribute is added by timm on one optimizer (adahessian)

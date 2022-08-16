@@ -29,6 +29,11 @@ from logger import create_logger
 from utils import load_checkpoint, load_pretrained, save_checkpoint, NativeScalerWithGradNormCount, auto_resume_helper, \
     reduce_tensor
 
+from nncf.torch import create_compressed_model
+from nncf import NNCFConfig
+import jstyleson as json
+from copy import deepcopy
+from nncf.torch.initialization import register_default_init_args
 
 def parse_option():
     parser = argparse.ArgumentParser('Swin Transformer training and evaluation script', add_help=False)
@@ -59,6 +64,8 @@ def parse_option():
                         help='mixed precision opt level, if O0, no amp is used (deprecated!)')
     parser.add_argument('--output', default='output', type=str, metavar='PATH',
                         help='root of output folder, the full path is <output>/<model_name>/<tag> (default: output)')
+    parser.add_argument('--nncf_cfg', default=None, type=str, 
+                        help='config of nncf')
     parser.add_argument('--tag', help='tag of experiment')
     parser.add_argument('--eval', action='store_true', help='Perform evaluation only')
     parser.add_argument('--throughput', action='store_true', help='Test throughput only')
@@ -94,6 +101,37 @@ def main(config):
         flops = model.flops()
         logger.info(f"number of GFLOPs: {flops / 1e9}")
 
+    if config.NNCF_CFG is not None:
+        if config.MODEL.PRETRAINED and (not config.MODEL.RESUME): # we dont support resume for nncf wrapped run
+            load_pretrained(config, model, logger)
+
+        with open(config.NNCF_CFG, "r") as f:
+            nncf_config = NNCFConfig.from_dict(json.load(f))
+            nncf_config['log_dir'] = config.OUTPUT
+
+        init_loader = deepcopy(data_loader_train)
+        nncf_config = register_default_init_args(
+            nncf_config,
+            init_loader,
+            #     criterion=criterion,
+            #     criterion_fn=train_criterion_fn,
+            #     train_steps_fn=train_steps_fn,
+            #     validate_fn=lambda *x: validate_model_fn(*x)[::2],
+            #     autoq_eval_fn=lambda *x: validate_model_fn(*x)[1],
+            #     val_loader=val_loader,
+            #     model_eval_fn=model_eval_fn,
+            #     device=config.device,
+            #     execution_parameters=execution_params,
+            )
+
+            # nncf_config = NNCFConfig.from_dict(
+            #     dict(
+            #             input_info=dict(sample_size=[1, 3, config.DATA.IMG_SIZE, config.DATA.IMG_SIZE]),
+            #             log_dir=config.OUTPUT
+            #         )
+            #     )
+        compression_ctrl, model = create_compressed_model(model, nncf_config)
+    
     model.cuda()
     model_without_ddp = model
 
@@ -136,9 +174,12 @@ def main(config):
             return
 
     if config.MODEL.PRETRAINED and (not config.MODEL.RESUME):
-        load_pretrained(config, model_without_ddp, logger)
+        if config.NNCF_CFG is None: # we have loaded the pretrained above
+            load_pretrained(config, model_without_ddp, logger)
         acc1, acc5, loss = validate(config, data_loader_val, model)
         logger.info(f"Accuracy of the network on the {len(dataset_val)} test images: {acc1:.1f}%")
+        if config.EVAL_MODE:
+            return
 
     if config.THROUGHPUT_MODE:
         throughput(data_loader_val, model, logger)

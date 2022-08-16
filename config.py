@@ -302,6 +302,11 @@ def update_config(config, args):
     if args.optim:
         config.TRAIN.OPTIMIZER.NAME = args.optim
 
+    if args.nncf_cfg is not None:
+        config.NNCF_CFG = args.nncf_cfg
+    else:
+        config.NNCF_CFG = None
+
     # set local rank for distributed training
     config.LOCAL_RANK = args.local_rank
 

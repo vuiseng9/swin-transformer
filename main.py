@@ -66,8 +66,6 @@ def parse_option():
                         help='mixed precision opt level, if O0, no amp is used (deprecated!)')
     parser.add_argument('--output', default='output', type=str, metavar='PATH',
                         help='root of output folder, the full path is <output>/<model_name>/<tag> (default: output)')
-    parser.add_argument('--nncf_cfg', default=None, type=str, 
-                        help='config of nncf')
     parser.add_argument('--tag', help='tag of experiment')
     parser.add_argument('--eval', action='store_true', help='Perform evaluation only')
     parser.add_argument('--throughput', action='store_true', help='Test throughput only')
@@ -103,11 +101,11 @@ def main(config):
         flops = model.flops()
         logger.info(f"number of GFLOPs: {flops / 1e9}")
 
-    if config.NNCF_CFG is not None:
+    if config.NNCF.JSONCFG is not None:
         if config.MODEL.PRETRAINED and (not config.MODEL.RESUME): # we dont support resume for nncf wrapped run
             load_pretrained(config, model, logger)
 
-        with open(config.NNCF_CFG, "r") as f:
+        with open(config.NNCF.JSONCFG, "r") as f:
             nncf_config = NNCFConfig.from_dict(json.load(f))
             nncf_config['log_dir'] = config.OUTPUT
 
@@ -176,7 +174,7 @@ def main(config):
             return
 
     if config.MODEL.PRETRAINED and (not config.MODEL.RESUME):
-        if config.NNCF_CFG is None: # we have loaded the pretrained above
+        if config.NNCF.JSONCFG is None: # we have loaded the pretrained above
             load_pretrained(config, model_without_ddp, logger)
         acc1, acc5, loss = validate(config, data_loader_val, model)
         logger.info(f"Accuracy of the network on the {len(dataset_val)} test images: {acc1:.1f}%")

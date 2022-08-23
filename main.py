@@ -37,6 +37,14 @@ from copy import deepcopy
 from nncf.torch.initialization import register_default_init_args
 from kd import KDTeacher
 
+# torch.autograd.set_detect_anomaly(True)
+
+try:
+    import wandb
+    has_wandb = True
+except ImportError: 
+    has_wandb = False
+
 def parse_option():
     parser = argparse.ArgumentParser('Swin Transformer training and evaluation script', add_help=False)
     parser.add_argument('--cfg', type=str, required=True, metavar="FILE", help='path to config file', )
@@ -80,7 +88,8 @@ def parse_option():
     ## overwrite optimizer in config (*.yaml) if specified, e.g., fused_adam/fused_lamb
     parser.add_argument('--optim', type=str,
                         help='overwrite optimizer if provided, can be adamw/sgd/fused_adam/fused_lamb.')
-
+    parser.add_argument('--wandb_id', default=None, type=str, 
+                        help='run identifier for wandb dashboard')
     args, unparsed = parser.parse_known_args()
 
     config = get_config(args)
@@ -89,6 +98,13 @@ def parse_option():
 
 
 def main(config):
+    log_wandb=False
+    if not config.EVAL_MODE:
+        if dist.get_rank() == 0:
+            if has_wandb is True and config.wandb_id is not None:
+                wandb.init(project=os.getenv("WANDB_PROJECT", "swin-transformer-ootb"), name=config.wandb_id, config=config)
+                log_wandb = True
+
     dataset_train, dataset_val, data_loader_train, data_loader_val, mixup_fn = build_loader(config)
 
     logger.info(f"Creating model:{config.MODEL.TYPE}/{config.MODEL.NAME}")
@@ -200,12 +216,23 @@ def main(config):
         data_loader_train.sampler.set_epoch(epoch)
 
         train_one_epoch(config, model, criterion, data_loader_train, optimizer, epoch, mixup_fn, lr_scheduler,
-                        loss_scaler, teacher)
+                        loss_scaler, log_wandb, teacher)
         if dist.get_rank() == 0 and (epoch % config.SAVE_FREQ == 0 or epoch == (config.TRAIN.EPOCHS - 1)):
             save_checkpoint(config, epoch, model_without_ddp, max_accuracy, optimizer, lr_scheduler, loss_scaler,
                             logger)
 
         acc1, acc5, loss = validate(config, data_loader_val, model)
+        if log_wandb is True: # only true for main process per initialization logic
+            global_step = (epoch+1)*len(data_loader_train)
+            wandb_dict = {
+                        "eval/global_step": global_step,
+                        "eval/end_of_epoch": epoch,
+                        "eval/top1": acc1,
+                        "eval/top5": acc5,
+                        "eval/loss": loss
+                        }
+            wandb.log(data=wandb_dict, step=global_step)
+
         logger.info(f"Accuracy of the network on the {len(dataset_val)} test images: {acc1:.1f}%")
         max_accuracy = max(max_accuracy, acc1)
         logger.info(f'Max accuracy: {max_accuracy:.2f}%')
@@ -215,7 +242,7 @@ def main(config):
     logger.info('Training time {}'.format(total_time_str))
 
 
-def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mixup_fn, lr_scheduler, loss_scaler, teacher=None):
+def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mixup_fn, lr_scheduler, loss_scaler, log_wandb=False, teacher=None):
     model.train()
     optimizer.zero_grad()
 
@@ -286,6 +313,21 @@ def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mix
                 f'grad_norm {norm_meter.val:.4f} ({norm_meter.avg:.4f})\t'
                 f'loss_scale {scaler_meter.val:.4f} ({scaler_meter.avg:.4f})\t'
                 f'mem {memory_used:.0f}MB')
+            
+            if log_wandb is True: # only true for main process per initialization logic
+                global_step = epoch*num_steps + idx
+                wandb_dict = {
+                    "train/global_step": global_step,
+                    "train/epoch": global_step/num_steps,
+                    "train/lr": lr,
+                    "train/wd": wd,
+                    "train/loss": loss_meter.val,
+                    "z/train/grad_norm": norm_meter.val,
+                    "z/train/loss_scale": scaler_meter.val,
+                    # "train/mem": memory_used
+                }
+                wandb.log(data=wandb_dict, step=global_step)
+
     epoch_time = time.time() - start
     logger.info(f"EPOCH {epoch} training takes {datetime.timedelta(seconds=int(epoch_time))}")
 

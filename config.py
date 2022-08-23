@@ -319,6 +319,10 @@ def update_config(config, args):
     # output folder
     config.OUTPUT = os.path.join(config.OUTPUT, config.MODEL.NAME, config.TAG)
 
+    config.wandb_id = args.wandb_id
+    config.hostname = os.uname().nodename
+    config.workdir = os.getcwd()
+
     config.freeze()
 
 

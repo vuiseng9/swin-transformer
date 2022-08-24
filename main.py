@@ -117,6 +117,7 @@ def main(config):
         flops = model.flops()
         logger.info(f"number of GFLOPs: {flops / 1e9}")
 
+    compression_ctrl = None
     if config.NNCF.JSONCFG is not None:
         if config.MODEL.PRETRAINED and (not config.MODEL.RESUME): # we dont support resume for nncf wrapped run
             load_pretrained(config, model, logger)
@@ -147,6 +148,8 @@ def main(config):
             #         )
             #     )
         compression_ctrl, model = create_compressed_model(model, nncf_config)
+        # if compression_ctrl is not None:
+        #     compression_ctrl.distributed()
     
     model.cuda()
     model_without_ddp = model
@@ -213,10 +216,13 @@ def main(config):
     logger.info("Start training")
     start_time = time.time()
     for epoch in range(config.TRAIN.START_EPOCH, config.TRAIN.EPOCHS):
+        if compression_ctrl is not None:
+            compression_ctrl.scheduler.epoch_step()
+
         data_loader_train.sampler.set_epoch(epoch)
 
         train_one_epoch(config, model, criterion, data_loader_train, optimizer, epoch, mixup_fn, lr_scheduler,
-                        loss_scaler, log_wandb, teacher)
+                        loss_scaler, log_wandb, teacher, compression_ctrl)
         if dist.get_rank() == 0 and (epoch % config.SAVE_FREQ == 0 or epoch == (config.TRAIN.EPOCHS - 1)):
             save_checkpoint(config, epoch, model_without_ddp, max_accuracy, optimizer, lr_scheduler, loss_scaler,
                             logger)
@@ -242,7 +248,7 @@ def main(config):
     logger.info('Training time {}'.format(total_time_str))
 
 
-def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mixup_fn, lr_scheduler, loss_scaler, log_wandb=False, teacher=None):
+def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mixup_fn, lr_scheduler, loss_scaler, log_wandb=False, teacher=None, compression_ctrl=None):
     model.train()
     optimizer.zero_grad()
 
@@ -279,6 +285,10 @@ def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mix
 
             loss = teacher.alpha * kd_loss + (1 - teacher.alpha) * loss
 
+        if compression_ctrl is not None:
+            compression_loss = compression_ctrl.loss()
+            loss += compression_loss
+
         loss = loss / config.TRAIN.ACCUMULATION_STEPS
 
         # this attribute is added by timm on one optimizer (adahessian)
@@ -292,6 +302,8 @@ def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mix
         loss_scale_value = loss_scaler.state_dict()["scale"]
 
         torch.cuda.synchronize()
+        if compression_ctrl is not None:
+            compression_ctrl.scheduler.step()
 
         loss_meter.update(loss.item(), targets.size(0))
         if grad_norm is not None:  # loss_scaler return None if not update

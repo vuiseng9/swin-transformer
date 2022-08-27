@@ -31,6 +31,6 @@
         "signed": true,
         "per_channel": false
       },
-      "ignored_scopes": ["{re}.*unbind*"]
     },
+    "ignored_scopes": ["{re}.*PatchEmbed.*", "{re}.*PatchMerging.*", "{re}.*unbind.*", "{re}.*head.*"],
 }

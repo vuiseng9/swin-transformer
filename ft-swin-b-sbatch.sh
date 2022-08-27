@@ -1,11 +1,20 @@
 #!/usr/bin/env bash
 
-RUNID=swin-b-p4-w7-r224-22kto1k-ftuned
+export WANDB_DISABLED=false # Enable wandb
+export WANDB_WATCH=false # Disable gradient serialization to wandb
+export WANDB_USERNAME=vchua
+export WANDB_API_KEY=f8a95080288950342f1695008cd8256adc3b0778
+
+# ---------------------------------------------------------------------------------------------
+export WANDB_PROJECT="swin-jpqd"
+
 SWIN_CFG=configs/swin/swin_base_patch4_window7_224_22kto1k_finetune.yaml
 PRETRAINED_CKPT=/data/vchua/run/msft-swin/swin/pretrained/swin_base_patch4_window7_224_22k.pth
 
-BS=64
 MASTER_PORT=12345
+BS=128
+
+RUNID=swin-b-p4-w7-r224-22kto1k-ftuned-bs${BS}
 
 DATADIR=/data/dataset/imagenet/ilsvrc2012/torchvision/
 
@@ -29,6 +38,7 @@ python -m torch.distributed.launch \
     --data-path $DATADIR \
     --output $OUTDIR \
    --batch-size $BS \
+   --wandb_id $RUNID \
    --accumulation-steps 2
 
 # original config used 8 cards, 64 bs each card

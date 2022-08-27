@@ -8,7 +8,7 @@ MODEL:
     NUM_HEADS: [ 4, 8, 16, 32 ]
     WINDOW_SIZE: 7
 DISTILL:
-  TEMPERATURE: 5
+  TEMPERATURE: 5.0
   ALPHA: 1.0
   TEACHER_CKPT: /data/vchua/run/msft-swin/swin/swin_large_patch4_window7_224_22kto1k_finetune/default/ckpt_epoch_29.pth
 TRAIN:

@@ -199,6 +199,10 @@ def main(config):
         logger.info(f"Accuracy of the network on the {len(dataset_val)} test images: {acc1:.1f}%")
         if config.EVAL_MODE:
             return
+        else:
+            if log_wandb is True: # only true for main process per initialization logic
+                wandb_dict = {"top1/initialized": acc1}
+                wandb.log(data=wandb_dict)
 
     teacher=None
     if config.DISTILL.TEACHER_CKPT is not None:
@@ -207,6 +211,9 @@ def main(config):
         teacher.eval()
         teacher.ddp(device_ids=[config.LOCAL_RANK])
         acc1, acc5, loss = validate(config, data_loader_val, teacher)
+        if log_wandb is True: # only true for main process per initialization logic
+            wandb_dict = {"top1/teacher": acc1}
+            wandb.log(data=wandb_dict)
         logger.info(f"Distillation enabled: Teacher Accuracy on the {len(dataset_val)} test images: {acc1:.1f}%")
 
     if config.THROUGHPUT_MODE:

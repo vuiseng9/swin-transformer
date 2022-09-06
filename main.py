@@ -36,6 +36,7 @@ import jstyleson as json
 from copy import deepcopy
 from nncf.torch.initialization import register_default_init_args
 from kd import KDTeacher
+from nncf.common.utils.tensorboard import prepare_for_tensorboard
 
 # torch.autograd.set_detect_anomaly(True)
 
@@ -148,6 +149,7 @@ def main(config):
             #         )
             #     )
         compression_ctrl, model = create_compressed_model(model, nncf_config)
+        compression_ctrl.hasfilled = False
         # if compression_ctrl is not None:
         #     compression_ctrl.distributed()
     
@@ -155,7 +157,7 @@ def main(config):
     model_without_ddp = model
 
     optimizer = build_optimizer(config, model)
-    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[config.LOCAL_RANK], broadcast_buffers=False)
+    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[config.LOCAL_RANK], broadcast_buffers=False, find_unused_parameters=True)
     loss_scaler = NativeScalerWithGradNormCount()
 
     if config.TRAIN.ACCUMULATION_STEPS > 1:
@@ -254,8 +256,8 @@ def main(config):
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     logger.info('Training time {}'.format(total_time_str))
 
-
 def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mixup_fn, lr_scheduler, loss_scaler, log_wandb=False, teacher=None, compression_ctrl=None):
+    LOADED=False
     model.train()
     optimizer.zero_grad()
 
@@ -310,6 +312,28 @@ def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mix
 
         torch.cuda.synchronize()
         if compression_ctrl is not None:
+            if compression_ctrl.hasfilled is False:
+                if hasattr(compression_ctrl, "child_ctrls"):
+                    mvmt_ctrl = compression_ctrl.child_ctrls[0]
+                else:
+                    mvmt_ctrl = compression_ctrl
+
+                if mvmt_ctrl.__class__.__name__ == 'MovementSparsityController':
+                    # if LOADED is False and mvmt_ctrl.scheduler.current_step+10 >= mvmt_ctrl.scheduler.warmup_end_epoch * mvmt_ctrl.scheduler._steps_per_epoch:
+                    #     model.module.load_state_dict(
+                    #         torch.load("/data/vchua/run/msft-swin/swin/mvmt-swin-b-22kto1k-tuned-bs128-r0.01-e5-15/mvmt-swin-b-p4-w7-224_22kto1k/default/ckpt_epoch_14.pth")['model']
+                    #     )
+                    #     LOADED=True
+                    if mvmt_ctrl.scheduler.current_step+1 >= mvmt_ctrl.scheduler.warmup_end_epoch * mvmt_ctrl.scheduler._steps_per_epoch:
+                        mvmt_ctrl.reset_independent_structured_mask()
+                        mvmt_ctrl.resolve_structured_mask()
+                        mvmt_ctrl.populate_structured_mask()
+                        
+                        global_step = epoch*num_steps + idx
+                        marker_pth = os.path.join(config.OUTPUT, 'structurization_epoch_{}-idx_{}-global_step_{}'.format(epoch,idx,global_step))
+                        os.makedirs(marker_pth, exist_ok=True)
+
+                        compression_ctrl.hasfilled = True
             compression_ctrl.scheduler.step()
 
         loss_meter.update(loss.item(), targets.size(0))
@@ -332,7 +356,7 @@ def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mix
                 f'grad_norm {norm_meter.val:.4f} ({norm_meter.avg:.4f})\t'
                 f'loss_scale {scaler_meter.val:.4f} ({scaler_meter.avg:.4f})\t'
                 f'mem {memory_used:.0f}MB')
-            
+
             if log_wandb is True: # only true for main process per initialization logic
                 global_step = epoch*num_steps + idx
                 wandb_dict = {
@@ -345,6 +369,12 @@ def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mix
                     "z/train/loss_scale": scaler_meter.val,
                     # "train/mem": memory_used
                 }
+
+                if compression_ctrl is not None:
+                    compression_stats = compression_ctrl.statistics()
+                    for key, value in prepare_for_tensorboard(compression_stats).items():
+                        wandb_dict["nncf/{0}".format(key.split("/")[-1])] = value
+                    wandb_dict["nncf/compression_loss"] = float(compression_loss)
                 wandb.log(data=wandb_dict, step=global_step)
 
     epoch_time = time.time() - start

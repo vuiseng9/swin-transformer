@@ -8,12 +8,12 @@
       "params": {
         "schedule": "threshold_polynomial_decay",
         "power": 3,
-        "init_importance_threshold": -20.0,
+        "init_importance_threshold": -0.1,
         "final_importance_threshold": 0.0,
-        "warmup_start_epoch": 10,
+        "warmup_start_epoch": 5,
         "warmup_end_epoch": 15,
         "steps_per_epoch": 2502,
-        "importance_regularization_factor": 0.02,
+        "importance_regularization_factor": 0.01,
         "update_per_optimizer_step": true,
       },
       "sparse_structure_by_scopes": [

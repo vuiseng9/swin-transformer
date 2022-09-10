@@ -12,6 +12,7 @@ import random
 import argparse
 import datetime
 import numpy as np
+import shutil
 
 import torch
 import torch.backends.cudnn as cudnn
@@ -123,6 +124,8 @@ def main(config):
         if config.MODEL.PRETRAINED and (not config.MODEL.RESUME): # we dont support resume for nncf wrapped run
             load_pretrained(config, model, logger)
 
+        shutil.copy(config.NNCF.JSONCFG, config.OUTPUT)
+
         with open(config.NNCF.JSONCFG, "r") as f:
             nncf_config = NNCFConfig.from_dict(json.load(f))
             nncf_config['log_dir'] = config.OUTPUT
@@ -149,6 +152,7 @@ def main(config):
             #         )
             #     )
         compression_ctrl, model = create_compressed_model(model, nncf_config)
+        logger.info(str(model))
         compression_ctrl.hasfilled = False
         # if compression_ctrl is not None:
         #     compression_ctrl.distributed()
@@ -489,6 +493,7 @@ if __name__ == '__main__':
     config.freeze()
 
     os.makedirs(config.OUTPUT, exist_ok=True)
+    shutil.copy(args.cfg, config.OUTPUT)
     logger = create_logger(output_dir=config.OUTPUT, dist_rank=dist.get_rank(), name=f"{config.MODEL.NAME}")
 
     if dist.get_rank() == 0:

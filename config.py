@@ -243,6 +243,7 @@ _C.FUSED_LAYERNORM = False
 #------------------
 _C.NNCF = CN()
 _C.NNCF.JSONCFG = None
+_C.NNCF.CKPT = None
 # Distillation
 _C.DISTILL = CN()
 _C.DISTILL.TEMPERATURE = 5.0
@@ -319,6 +320,8 @@ def update_config(config, args):
     # output folder
     config.OUTPUT = os.path.join(config.OUTPUT, config.MODEL.NAME, config.TAG)
 
+    # NNCF CKPT
+    config.NNCF.CKPT = args.nncfckpt
     config.wandb_id = args.wandb_id
     config.hostname = os.uname().nodename
     config.workdir = os.getcwd()

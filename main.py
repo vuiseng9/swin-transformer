@@ -76,6 +76,8 @@ def parse_option():
                         help='mixed precision opt level, if O0, no amp is used (deprecated!)')
     parser.add_argument('--output', default='output', type=str, metavar='PATH',
                         help='root of output folder, the full path is <output>/<model_name>/<tag> (default: output)')
+    parser.add_argument('--nncfckpt', default=None, type=str,
+                        help='checkpoint path to load after nncf wrapping')
     parser.add_argument('--tag', help='tag of experiment')
     parser.add_argument('--eval', action='store_true', help='Perform evaluation only')
     parser.add_argument('--throughput', action='store_true', help='Test throughput only')
@@ -153,6 +155,10 @@ def main(config):
             #     )
         compression_ctrl, model = create_compressed_model(model, nncf_config)
         logger.info(str(model))
+
+        if config.NNCF.CKPT is not None:
+            logger.info(f'Loading NNCF checkpoint {config.NNCF.CKPT} ...')
+            model.load_state_dict(torch.load(config.NNCF.CKPT)['model'])
         compression_ctrl.hasfilled = False
         # if compression_ctrl is not None:
         #     compression_ctrl.distributed()
@@ -290,6 +296,10 @@ def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mix
                 with torch.no_grad():
                     teacher_logits = teacher(samples)
 
+            # kd_loss = F.cross_entropy(
+            #     input=(outputs / teacher.temp),
+            #     target=F.softmax(teacher_logits / teacher.temp, dim=-1),
+            #     ) * (teacher.temp ** 2)
             kd_loss = F.kl_div(
                 input=F.log_softmax(outputs / teacher.temp, dim=-1),
                 target=F.softmax(teacher_logits / teacher.temp, dim=-1),

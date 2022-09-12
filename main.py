@@ -18,6 +18,7 @@ import torch
 import torch.backends.cudnn as cudnn
 import torch.distributed as dist
 import torch.nn.functional as F
+from torch import onnx
 
 from timm.loss import LabelSmoothingCrossEntropy, SoftTargetCrossEntropy
 from timm.utils import accuracy, AverageMeter
@@ -80,6 +81,7 @@ def parse_option():
                         help='checkpoint path to load after nncf wrapping')
     parser.add_argument('--tag', help='tag of experiment')
     parser.add_argument('--eval', action='store_true', help='Perform evaluation only')
+    parser.add_argument('--gen_onnx', action='store_true', help='generate model onnx, --eval must be enabled as well')
     parser.add_argument('--throughput', action='store_true', help='Test throughput only')
 
     # distributed training
@@ -209,12 +211,58 @@ def main(config):
             load_pretrained(config, model_without_ddp, logger)
         acc1, acc5, loss = validate(config, data_loader_val, model)
         logger.info(f"Accuracy of the network on the {len(dataset_val)} test images: {acc1:.1f}%")
-        if config.EVAL_MODE:
-            return
-        else:
+        if config.EVAL_MODE is not True: #only push to wandb if training
             if log_wandb is True: # only true for main process per initialization logic
                 wandb_dict = {"top1/initialized": acc1}
                 wandb.log(data=wandb_dict)
+
+    if config.EVAL_MODE is True and args.gen_onnx is True:
+        def generate_input_names_list(num_inputs: int):
+            return [f'input.{idx}' for idx in range(0, num_inputs)]
+
+        if dist.get_rank() == 0:
+            ir_dir = os.path.join(config.OUTPUT, "ir")
+            os.makedirs(ir_dir, exist_ok=True)
+            if isinstance(model, torch.nn.parallel.DistributedDataParallel):
+                model_label = model.module.__class__.__name__
+            else:
+                model_name = model.__class__.__name__
+
+            if compression_ctrl is None:
+                onnx_pth = os.path.join(ir_dir, '{}.dense.fp32.onnx'.format(model_label))
+
+                model.to('cpu')
+
+                dummy_tensor = torch.ones([1, 3, config.DATA.IMG_SIZE, config.DATA.IMG_SIZE])
+                onnx.export(model.module, dummy_tensor, onnx_pth,
+                            input_names=generate_input_names_list(0),
+                            opset_version=13,
+                              # Do not fuse Conv+BN in ONNX. May cause dropout elements to appear in ONNX.
+                            training=True)
+
+            else:
+                is_quantized = False
+                if hasattr(compression_ctrl, 'child_ctrls'):
+                    for ctrl in compression_ctrl.child_ctrls:
+                        if ctrl.__class__.__name__ == 'QuantizationController':
+                            is_quantized=True
+                elif compression_ctrl.__class__.__name__ == 'QuantizationController':
+                    is_quantized = True
+
+                if is_quantized is True:
+                    onnx_pth = os.path.join(ir_dir, '{}.8bit.onnx'.format(model_label))
+                else:
+                    onnx_pth = os.path.join(ir_dir, '{}.fp32.onnx'.format(model_label))
+                compression_ctrl.export_model(onnx_pth)
+
+            # Generate OpenVINO IR
+            if os.path.exists(onnx_pth):
+                import subprocess
+                subprocess.run(["mo", "--input_model", onnx_pth, "--model_name", os.path.basename(os.path.splitext(onnx_pth)[0]), "--output_dir", ir_dir], check=True)
+
+    # force exit if it is eval mode
+    if config.EVAL_MODE is True:
+        return
 
     teacher=None
     if config.DISTILL.TEACHER_CKPT is not None:

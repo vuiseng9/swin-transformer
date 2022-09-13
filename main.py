@@ -39,7 +39,7 @@ from copy import deepcopy
 from nncf.torch.initialization import register_default_init_args
 from kd import KDTeacher
 from nncf.common.utils.tensorboard import prepare_for_tensorboard
-
+from manual_crop import SwinCropper
 # torch.autograd.set_detect_anomaly(True)
 
 try:
@@ -82,6 +82,7 @@ def parse_option():
     parser.add_argument('--tag', help='tag of experiment')
     parser.add_argument('--eval', action='store_true', help='Perform evaluation only')
     parser.add_argument('--gen_onnx', action='store_true', help='generate model onnx, --eval must be enabled as well')
+    parser.add_argument('--manual_crop', action='store_true', help='manual removal of sparsified dimension, only applicable for nncf wrapped model')
     parser.add_argument('--throughput', action='store_true', help='Test throughput only')
 
     # distributed training
@@ -161,6 +162,11 @@ def main(config):
         if config.NNCF.CKPT is not None:
             logger.info(f'Loading NNCF checkpoint {config.NNCF.CKPT} ...')
             model.load_state_dict(torch.load(config.NNCF.CKPT)['model'])
+        
+        if args.manual_crop is True and compression_ctrl is not None:
+            cropper = SwinCropper()
+            model = cropper(compression_ctrl, model, config)
+
         compression_ctrl.hasfilled = False
         # if compression_ctrl is not None:
         #     compression_ctrl.distributed()
@@ -241,6 +247,19 @@ def main(config):
                             training=True)
 
             else:
+                if args.manual_crop is True:
+                    class DummySD:
+                        def __init__(self) -> None:
+                            pass
+                        def state_dict(self):
+                            return {'dummy': None}
+                    dummysd = DummySD()
+
+                    save_checkpoint(  config, "cropped", model, None,         dummysd,    dummysd,       dummysd,      logger)
+                    # save_checkpoint(config, epoch,     model, max_accuracy, optimizer, lr_scheduler, loss_scaler, logger)
+                    cropped_ckpt_path = os.path.join(config.OUTPUT, f'ckpt_epoch_cropped.pth')
+                    shutil.copy(cropped_ckpt_path, ir_dir)
+
                 is_quantized = False
                 if hasattr(compression_ctrl, 'child_ctrls'):
                     for ctrl in compression_ctrl.child_ctrls:

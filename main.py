@@ -131,6 +131,13 @@ def main(config):
 
         shutil.copy(config.NNCF.JSONCFG, config.OUTPUT)
 
+        if config.NNCF.CKPT is not None:
+            overriding_nncfcfg = os.path.join(os.path.dirname(config.NNCF.CKPT), "corresponding_nncfcfg.json")
+            assert os.path.exists(overriding_nncfcfg), "Missing config {}, pls copy or link the nncf cfg of the ckpt".format(overriding_nncfcfg)
+            config.defrost()
+            config.NNCF.JSONCFG = overriding_nncfcfg
+            config.freeze()
+
         with open(config.NNCF.JSONCFG, "r") as f:
             nncf_config = NNCFConfig.from_dict(json.load(f))
             nncf_config['log_dir'] = config.OUTPUT

@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 import torch.utils.checkpoint as checkpoint
 from timm.models.layers import DropPath, to_2tuple, trunc_normal_
-
+QKV_REDEFINED=True
 try:
     import os, sys
 
@@ -114,7 +114,13 @@ class WindowAttention(nn.Module):
         relative_position_index = relative_coords.sum(-1)  # Wh*Ww, Wh*Ww
         self.register_buffer("relative_position_index", relative_position_index)
 
-        self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
+        if QKV_REDEFINED is True:
+            self.q = nn.Linear(dim, dim, bias=qkv_bias)
+            self.k = nn.Linear(dim, dim, bias=qkv_bias)
+            self.v = nn.Linear(dim, dim, bias=qkv_bias)        
+        else:
+            self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
+
         self.attn_drop = nn.Dropout(attn_drop)
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
@@ -129,8 +135,14 @@ class WindowAttention(nn.Module):
             mask: (0/-inf) mask with shape of (num_windows, Wh*Ww, Wh*Ww) or None
         """
         B_, N, C = x.shape
-        qkv = self.qkv(x).reshape(B_, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
-        q, k, v = qkv[0], qkv[1], qkv[2]  # make torchscript happy (cannot use tensor as tuple)
+
+        if QKV_REDEFINED is True:
+            q = self.q(x).reshape(B_, N, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3)
+            k = self.k(x).reshape(B_, N, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3)
+            v = self.v(x).reshape(B_, N, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3)        
+        else:
+            qkv = self.qkv(x).reshape(B_, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
+            q, k, v = qkv[0], qkv[1], qkv[2]  # make torchscript happy (cannot use tensor as tuple)
 
         q = q * self.scale
         attn = (q @ k.transpose(-2, -1))
